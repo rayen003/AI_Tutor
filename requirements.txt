@@ -1,0 +1,12 @@
+langchain
+langchain-openai
+langgraph
+python-dotenv
+openai
+pydantic_v1
+pydantic
+
+
+
+# App
+flask
