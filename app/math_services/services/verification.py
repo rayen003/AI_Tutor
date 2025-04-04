@@ -11,7 +11,7 @@ def verify_solution_steps(state):
     
     # Nothing to verify if there are no steps
     if not state.solution_steps:
-        return state.model_copy()
+        return state.copy()
     
     problem = state.problem
     variables = state.variables
@@ -34,13 +34,7 @@ def verify_solution_steps(state):
     2. Logical progression (each step follows from previous ones)
     3. Clarity and educational value
     
-    For each step, provide:
-    - Verification status: CORRECT or INCORRECT
-    - Confidence score (0-100%)
-    - Explanation (especially for errors)
-    - Suggested correction (if needed)
-    
-    Format your response as a JSON array:
+    For each step, provide ONLY a JSON array with the following format:
     [
         {{
             "step_number": 1,
@@ -57,24 +51,36 @@ def verify_solution_steps(state):
             "suggestion": "Step should be: x = 5 instead of x = 4"
         }}
     ]
+    
+    Do not include any text before or after the JSON array. Only return the JSON array.
     """)
     
     # Get verification results
-    response = llm.invoke(
-        verification_prompt.format(
-            problem=problem, 
-            var_context=var_context,
-            steps="\n".join([f"Step {i+1}: {step}" for i, step in enumerate(steps)])
-        )
-    )
-    
-    # Parse verification results
     try:
+        response = llm.invoke(
+            verification_prompt.format(
+                problem=problem, 
+                var_context=var_context,
+                steps="\n".join([f"Step {i+1}: {step}" for i, step in enumerate(steps)])
+            )
+        )
+        
+        # Parse verification results
         import json
-        verification_results = json.loads(response.content)
+        content = response.content.strip()
+        
+        # Handle empty responses
+        if not content:
+            print("Warning: Empty verification response")
+            new_state = state.copy()
+            new_state.verification_results = []
+            new_state.needs_regeneration = False
+            return new_state
+            
+        verification_results = json.loads(content)
         
         # Create new state with verification results
-        new_state = state.model_copy()
+        new_state = state.copy()
         
         # Add verification metadata to our state
         new_state.verification_results = verification_results
@@ -92,9 +98,11 @@ def verify_solution_steps(state):
         
         return new_state
     except Exception as e:
-        # Fallback for parsing failure
-        print(f"Error parsing verification results: {e}")
-        new_state = state.model_copy()
+        # Fallback for parsing failure or API error
+        print(f"Error in verification: {e}")
+        new_state = state.copy()
+        new_state.verification_results = []
+        new_state.needs_regeneration = False
         new_state.verification_error = str(e)
         return new_state
 
@@ -108,7 +116,7 @@ def regenerate_solution_steps(state):
     
     # Nothing to regenerate if no steps are marked for regeneration
     if not state.needs_regeneration or not state.steps_to_regenerate:
-        return state.model_copy()
+        return state.copy()
     
     problem = state.problem
     variables = state.variables
@@ -183,7 +191,7 @@ def regenerate_solution_steps(state):
                 new_steps.append(steps[i-1])
         
         # Create new state with regenerated steps
-        new_state = state.model_copy()
+        new_state = state.copy()
         new_state.solution_steps = new_steps
         
         # Reset regeneration flags
@@ -194,6 +202,6 @@ def regenerate_solution_steps(state):
     except Exception as e:
         # Fallback for parsing failure
         print(f"Error parsing regenerated steps: {e}")
-        new_state = state.model_copy()
+        new_state = state.copy()
         new_state.regeneration_error = str(e)
         return new_state 

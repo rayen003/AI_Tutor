@@ -1,0 +1,13 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+        "math_tutor": "app.main:app"
+    },
+    "env": ".env",
+    "config": {
+        "channels": [
+            {"name": "langgraph:state", "affordance": "STATE"},
+            {"name": "langgraph:artifacts", "affordance": "ARTIFACTS"}
+        ]
+    }
+} 

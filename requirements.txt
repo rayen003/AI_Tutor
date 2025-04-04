@@ -1,3 +1,4 @@
+# Core dependencies
 langchain
 langchain-openai
 langgraph
@@ -6,7 +7,16 @@ openai
 pydantic_v1
 pydantic
 
+# Interactive tools dependencies
+numpy
+matplotlib
+pandas
+sympy
+scipy
 
-
-# App
+# Web app dependencies
 flask
+
+# Agent tools
+langchain-community
+langchain-experimental

@@ -1,0 +1,3 @@
+"""
+Math Tutor application package
+""" 

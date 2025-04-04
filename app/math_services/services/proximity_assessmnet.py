@@ -8,7 +8,7 @@ def assess_correctness(state):
     
     if not state.solution_steps:
         # No steps to assess
-        new_state = state.model_copy()
+        new_state = state.copy()
         new_state.is_correct = False
         new_state.feedback = "No solution steps provided."
         return new_state
@@ -57,7 +57,7 @@ def assess_correctness(state):
     feedback_match = re.search(r"Feedback: ([^\n]+)", response.content)
     feedback = feedback_match.group(1) if feedback_match else "No feedback provided."
     
-    new_state = state.model_copy()
+    new_state = state.copy()
     new_state.is_correct = is_correct
     new_state.final_answer = final_answer
     new_state.feedback = feedback

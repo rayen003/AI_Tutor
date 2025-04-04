@@ -180,5 +180,35 @@ def get_available_tools() -> List[Dict[str, Any]]:
                 "periods": "Number of periods"
             }
         },
-        # Add more tools as needed
+        {
+            "name": "pmt_calculation",
+            "description": "Calculate the payment for a loan based on constant payments and interest",
+            "parameters": {
+                "principal": "Loan principal",
+                "rate": "Interest rate per period (as a decimal)",
+                "periods": "Number of periods"
+            }
+        },
+        {
+            "name": "mean",
+            "description": "Calculate the mean of a list of values",
+            "parameters": {
+                "values": "List of numerical values"
+            }
+        },
+        {
+            "name": "median",
+            "description": "Calculate the median of a list of values",
+            "parameters": {
+                "values": "List of numerical values"
+            }
+        },
+        {
+            "name": "standard_deviation",
+            "description": "Calculate the standard deviation of a list of values",
+            "parameters": {
+                "values": "List of numerical values",
+                "sample": "If True, calculate sample standard deviation; if False, calculate population standard deviation"
+            }
+        }
     ] 

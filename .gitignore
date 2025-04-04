@@ -1,4 +1,10 @@
-# Python
+# Environment variables and secrets
+.env
+*.env
+env/
+venv/
+
+# Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,33 +26,31 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment files
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# Log files
+*.log
+logs/
+math_tutor_test.log
 
-# VS Code
-.vscode/
-*.code-workspace
-
-# PyCharm
+# IDE specific files
 .idea/
-*.iml
+.vscode/
+*.swp
+*.swo
+.DS_Store
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Testing
-.coverage
-htmlcov/
+# Graph visualization files
+*.dot
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Cache directories
+.cache/
 .pytest_cache/
 
-# Logs
-*.log
-
-# OSX
-.DS_Store 
+# Local development files
+node_modules/ 

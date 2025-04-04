@@ -16,59 +16,94 @@ MathTutor is an intelligent tutoring system specifically designed for BBA (Bache
 
 5. **Subject-Specific Context**: The system recognizes the different requirements of various business disciplines, from time-value-of-money calculations to statistical analyses.
 
-## Implementation Versions
+6. **Interactive Visual Learning**: The system enhances understanding through visualizations, interactive calculations, and comparative analyses.
 
-### Simple Implementation (`math_tutor_simple.py`)
+## Key Features
 
-We've created a streamlined version that demonstrates the core functionality:
+### Core Tutoring Capabilities
 
 - Problem classification (math vs. general question)
 - Step-by-step solution generation
-- Progressive hint system (3 levels)
-- Basic answer assessment
-- Command-line demo interface
+- Progressive hint system with multiple levels
+- Answer assessment and feedback
+- Solution verification and regeneration
+- State tracking for personalized learning
 
-To try this version:
-```
-python -m app.demo
-```
+### Interactive Tools
 
-### Full Implementation (`main.py`)
+- **Visualization Tools**: Plot mathematical functions, create visualizations of financial concepts
+- **Calculation Tools**: Specialized calculators for financial, statistical, and accounting problems
+- **Practice Problem Generation**: Create custom practice problems at varying difficulty levels
+- **Equation Solving**: Step-by-step equation solving with explanations
+- **Investment Comparison**: Compare different investment options with visual growth charts
 
-Our comprehensive implementation includes:
+## LangGraph Implementation
+
+MathTutor leverages the LangGraph framework to create a robust, modular architecture with:
 
 - Advanced state management
-- Solution verification and regeneration
-- Temporal tracking of student progress
-- Web interface with Streamlit
-- Specialized mathematical tools
+- Node-based workflow processing
+- Conditional graph routing
+- State observation and monitoring
 
-To run the full version:
+To run the application:
 ```
-streamlit run app/main.py
+langgraph dev
 ```
 
-## Project Structure
+## Architecture
+
+### Modular Architecture
+
+The codebase has been refactored into a modular architecture:
 
 ```
 app/
-├── main.py                      # Full implementation entry point
-├── math_tutor_simple.py         # Simplified implementation
-├── demo.py                      # Command-line demo
-├── test_math_tutor.py           # Test script
-├── math_services/               # Core tutoring services
-│   ├── main.py                  # MathTutor orchestration
-│   ├── prompts.py               # Centralized prompt templates
-│   ├── state.py                 # State management
-│   ├── services/                # Specialized service modules
+├── main.py                      # Graph definition and main entry point
+├── models.py                    # State models
+├── prompts.py                   # Prompt templates
+├── test_graph.py                # Test script for the graph
+├── demo_tools.py                # Demonstrations of custom tools
+│
+├── math_services/               # Core math tutoring services
+│   ├── services/                # Service modules
+│   │   ├── node_services.py     # Core node functions for the graph
 │   │   ├── verification.py      # Solution verification
-│   │   ├── reasoning.py         # Solution generation
-│   │   ├── hint_generation.py   # Hint generation
-│   │   ├── proximity_assessment.py # Answer evaluation
-│   │   └── response_parsing.py  # Variable extraction
-│   └── tools/                   # Specialized mathematical tools
-│       └── math_tools.py        # Financial, statistical tools
+│   │   └── proximity_assessmnet.py # Answer evaluation
+│   │
+│   └── tools/                   # Interactive tools
+│       ├── math_tools.py        # Core math calculation functions
+│       ├── interactive_tools.py # Visual and interactive tools
+│       └── tool_integration.py  # LangChain tools integration
 ```
+
+### State Flow
+
+1. **Input State**: Problem, requested action, user answer
+2. **Internal State**: Complete processing state with tracking
+3. **Output State**: User-visible results and feedback
+
+### Node-based Processing
+
+The workflow is built using a graph of processing nodes:
+
+1. **Initial Nodes**:
+   - Initialize session
+   - Classify workflow
+
+2. **Math Workflow**:
+   - Parse variables
+   - Define context
+   - Generate solution
+   - Verify solution
+   - Generate hints
+   - Process user answer
+   - Format response
+
+3. **Conditional Routing**:
+   - Math vs. general questions
+   - Need for solution regeneration
+   - Next suggestions based on user progress
 
 ## Installation
 
@@ -94,31 +129,33 @@ app/
    OPENAI_API_KEY=your_api_key_here
    ```
 
-5. Run the simple demo:
+5. Run the application:
    ```
-   python -m app.demo
+   langgraph dev
    ```
 
-## Usage - Simple Demo
+6. To test the interactive tools:
+   ```
+   python -m app.demo_tools
+   ```
 
-1. Type in a math problem or business-related question
-2. The system will categorize it and generate a solution
-3. For math problems, you can:
-   - Request progressive hints (Level 1-3)
-   - View the complete solution
-   - Submit your answer for evaluation
-4. For general questions, you'll receive a comprehensive explanation
+## Interactive Tool Demonstrations
 
-## Development Approach
+The `demo_tools.py` script demonstrates various interactive capabilities:
 
-We're following an incremental development approach:
+1. **Present Value Calculation**: Step-by-step calculation with visualization
+2. **Function Visualization**: Plot mathematical functions and identify key points
+3. **Equation Solving**: Solve algebraic equations with detailed explanations
+4. **Practice Problem Generation**: Create custom practice problems based on topic and difficulty
+5. **Investment Comparison**: Compare multiple investment options with visual growth charts
 
-1. [x] Simple monolithic implementation (`math_tutor_simple.py`)
-2. [x] Dual-state model (internal state and user-facing responses)
-3. [x] Command-line demo
-4. [x] Modularized components and services
-5. [x] Mathematical tool integration
-6. [x] Web UI with Streamlit
+## Future Enhancements
+
+1. **Student Profile Tracking**: Long-term learning progression and analytics
+2. **Expanded Interactive Tools**: More subject-specific tools and visualizations
+3. **Multi-step Problems**: Complex, multi-part business case studies
+4. **Tool-integrated Learning Sessions**: Interactive tutoring sessions with integrated tools
+5. **Adaptive Difficulty**: Dynamically adjust problem difficulty based on student performance
 
 ## Contributing
 
