@@ -70,6 +70,9 @@ class MathTutorInternalState(BaseModel):
     
     # Answer assessment
     answer_proximity: Optional[float] = None  # 0.0 to 1.0
+    
+    # New fields from the code block
+    verification_error: Optional[str] = None
 
 class MathTutorOutputState(BaseModel):
     """Output state for the MathTutor - what the user sees."""
