@@ -1,7 +1,7 @@
 {
     "dependencies": ["."],
     "graphs": {
-        "math_tutor": "app.main:app"
+        "simple_tutor": "./simple_app/app.py:app"
     },
     "env": ".env",
     "config": {
