@@ -11,6 +11,11 @@ from langchain_core.pydantic_v1 import BaseModel, Field # Import Pydantic
 from langchain.tools import tool # Import tool decorator
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import AnyMessage
+from langgraph.checkpoint.memory import MemorySaver # Import MemorySaver
+import warnings
+import uuid # Import uuid for thread IDs
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Load environment variables
 load_dotenv()
@@ -20,27 +25,31 @@ Messages = List[BaseMessage]
 
 class SimpleTutorState(TypedDict):
     """
-    Represents the state of our simple tutor graph.
+    Represents the state of our simple tutor graph for turn-based execution.
     """
-    # Inputs
+    # Inputs for a given turn
     problem: str
-    user_answer: Optional[str]
-    chat_history: Messages
+    user_answer: Optional[str] = None # Can be updated by the user/simulation
+    action: Optional[str] = None      # Added: Goal for this turn (e.g., 'solve', 'assess', 'hint')
+
+    # History / Context
+    chat_history: Messages = []
+    request_details: Optional[str] = None
 
     # Graph Control & Intermediate
-    complexity: Optional[str] = None           # Added: 'simple', 'medium', 'complex'
-    plan: Optional[List[str]] = None           # Added: High-level steps from planning node
+    complexity: Optional[str] = None
+    plan: Optional[List[str]] = None
 
-    # Generated Content
-    solution_steps: Optional[List[str]] = None # CoT steps (generated directly or from plan)
+    # Generated Content - Persists across turns
+    solution_steps: Optional[List[str]] = None # Added back for CoT/Hints
     correct_answer: Optional[str] = None
-    hint: Optional[str] = None
-    error: Optional[str] = None
+    hint: Optional[str] = None # Holds the hint *generated* in a turn
+    error: Optional[str] = None # Holds error *from* a turn
 
-    # Assessment Results
+    # Assessment Results - Persists across turns
     verification_result: Optional[Dict[str, str]] = None
     is_correct: Optional[bool] = None
-    feedback: Optional[str] = None
+    feedback: Optional[str] = None # Holds feedback *generated* in a turn
 
 # --- Pydantic Model for Structured Output ---
 class TutorSolution(BaseModel):
@@ -50,7 +59,11 @@ class TutorSolution(BaseModel):
 
 # --- Initialize LLM ---
 # Use a cost-effective model for now
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(
+    model="gpt-4o-mini", 
+    temperature=0, 
+    request_timeout=60 # Add a 60-second timeout
+)
 
 # --- Tool Definition (Placeholder for now) ---
 # We'll define a tool for solving/checking math problems later
@@ -113,30 +126,32 @@ def clean_math_string(input_str: str) -> str:
         return ""
     # Remove prefixes like "x = ", "y = ", etc.
     cleaned = re.sub(r'^[a-zA-Z]\s*=\s*', '', input_str.strip()).strip()
-    # Remove LaTeX delimiters \(\), \[\]
-    cleaned = cleaned.replace('\\(', '').replace('\\)', '').replace('\\[', '').replace('\\\]', '')
+    # Remove LaTeX delimiters \(\), \[\] and standard brackets for safety
+    cleaned = cleaned.replace('\\(', '').replace('\\)', '') # LaTeX inline
+    cleaned = cleaned.replace('\\[', '').replace('\\]', '') # LaTeX display - Corrected escape
+    cleaned = cleaned.replace('[', '').replace(']', '')   # Standard brackets
+    cleaned = cleaned.replace('{', '').replace('}', '')   # Standard braces
     # Remove any remaining leading/trailing whitespace
     cleaned = cleaned.strip()
     return cleaned
 
-# --- Node Functions (Placeholders) ---
+# --- NEW CoT GENERATION NODE ---
 def generate_cot(state: SimpleTutorState) -> dict:
-    """Generates CoT based on complexity, optionally using a plan."""
+    """Generates CoT based on complexity, optionally using a plan. Handles tool calls."""
     print("--- Node: generate_cot ---")
     problem = state["problem"]
     complexity = state.get("complexity", "medium") # Default if missing
     plan = state.get("plan")
-    # Use .get() with a default empty list to avoid KeyError
-    current_messages = list(state.get("chat_history", [])[-5:])
+    messages = list(state.get("chat_history", [])[-5:]) # Get recent history
 
     # Define prompts based on complexity
     if complexity == 'simple':
         print("--- Using SIMPLE prompt for CoT generation ---")
         system_prompt = """You are a helpful math tutor. Solve the user's problem step-by-step (Chain-of-Thought).
 Keep the steps concise for this simple problem.
-Use the available tools (like the calculator) if necessary.
-Think step by step before outputting the final structured response."""
-        prompt_messages = [SystemMessage(content=system_prompt)] + current_messages + [HumanMessage(content=f"Solve this simple problem: {problem}")]
+Use the available tools (like the calculator) if necessary *within* your steps for calculations.
+Think step by step before outputting the final structured response in the required format."""
+        prompt_messages = [SystemMessage(content=system_prompt)] + messages + [HumanMessage(content=f"Solve this simple problem: {problem}")]
     else: # medium or complex
         print("--- Using PLAN-BASED prompt for CoT generation ---")
         if not plan:
@@ -145,73 +160,104 @@ Think step by step before outputting the final structured response."""
         plan_str = "\n".join(f"- {p}" for p in plan)
         system_prompt = """You are a helpful math tutor. Solve the user's problem step-by-step (Chain-of-Thought), following the provided plan.
 Use the available tools (like the calculator) if necessary for calculations within your steps.
-Think step by step, elaborating on the plan, before outputting the final structured response."""
+Think step by step, elaborating on the plan, before outputting the final structured response in the required format."""
         prompt_messages = [
             SystemMessage(content=system_prompt),
-            AIMessage(content=f"Here is the plan to follow:\n{plan_str}"), # Inject plan as AI message
-            # HumanMessage(content=f"Now, solve the problem following that plan: {problem}") # Reiterate problem?
-        ] + current_messages # Include history for context
+            AIMessage(content=f"Here is the plan to follow:\n{plan_str}"), # Inject plan
+        ] + messages # Include history
 
-    max_iterations = 5
-    llm_call_count = 0
-
+    # --- LLM Call with Tool Handling ---
     try:
-        for i in range(max_iterations):
-            llm_call_count += 1
-            print(f"--- LLM Invocation (Iteration {i+1}) ---")
-            invokable_llm = llm_with_tools
-            ai_response = invokable_llm.invoke(prompt_messages)
-            print(f"--- AI Response Object (Iteration {i+1}): {repr(ai_response)} ---")
-
-            if ai_response.tool_calls:
-                print("--- Detected Tool Calls --- ")
-                tool_messages = []
-                prompt_messages.append(ai_response) # Add AI request to history
-                for tool_call in ai_response.tool_calls:
-                    tool_name = tool_call.get('name')
-                    tool_args = tool_call.get('args')
-                    tool_id = tool_call.get('id')
-                    print(f"Tool Call: {tool_name}, Args: {tool_args}, ID: {tool_id}")
-                    tool_result = "Error: Tool not found"
-                    if tool_name == 'calculator':
-                        tool_result = calculator.invoke(tool_args)
-                    else:
-                        print(f"Warning: Unknown tool requested: {tool_name}")
-                    tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
-                
-                prompt_messages.extend(tool_messages) # Add tool results to history
-                if i == max_iterations - 1:
-                     print("Error: Max iterations reached during tool calls.")
-                     return {"error": "Max tool call iterations reached."}
-                continue # Continue loop for next LLM call
-            
-            elif hasattr(ai_response, 'content') and ai_response.content:
-                print("--- Final Reasoning Received, formatting with Structured Output --- ")
-                structured_llm = llm.with_structured_output(TutorSolution)
-                final_structured_response = structured_llm.invoke(prompt_messages + [ai_response])
-                print(f"--- Structured Output Object: {repr(final_structured_response)} ---")
-                
-                if isinstance(final_structured_response, TutorSolution):
-                    return {
-                        "solution_steps": final_structured_response.steps,
-                        "correct_answer": final_structured_response.final_answer,
-                        "error": None
-                    }
-                else:
-                     print("Error: Structured output call did not return TutorSolution object.")
-                     return {"error": f"Failed to get structured output. Object: {repr(final_structured_response)}"}
-            else:
-                print("Error: AI Response has no content or tool calls.")
-                return {"error": f"AI Response missing content/tool_calls. Object: {repr(ai_response)}"}
+        print("DEBUG: Invoking LLM for CoT generation (with tool handling).")
+        response = llm_with_tools.invoke(prompt_messages)
+        print(f"--- Initial CoT LLM Response: {repr(response)} ---")
         
-        print("Error: Loop completed unexpectedly.")
-        return {"error": "Unexpected end of generation loop."}
+        messages.append(response) # Add initial AI response to messages
+
+        # --- Handle Tool Calls if Present ---
+        if response.tool_calls:
+            print("--- Tool calls detected. Executing tools... ---")
+            tool_messages = []
+            for tool_call in response.tool_calls:
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                tool_id = tool_call.get("id")
+                
+                print(f"  - Executing tool '{tool_name}' with args: {tool_args} (ID: {tool_id})")
+                
+                # Find the tool function (simple lookup for now)
+                selected_tool = None
+                for t in tools:
+                    if t.name == tool_name:
+                        selected_tool = t
+                        break
+                
+                if selected_tool:
+                    try:
+                        # Pass arguments from tool_call['args']
+                        tool_output = selected_tool.invoke(tool_args) 
+                        print(f"  - Tool '{tool_name}' output: {tool_output}")
+                        tool_messages.append(ToolMessage(content=str(tool_output), tool_call_id=tool_id))
+                    except Exception as tool_err:
+                        print(f"  - Error executing tool '{tool_name}': {tool_err}")
+                        tool_messages.append(ToolMessage(content=f"Error executing tool: {str(tool_err)}", tool_call_id=tool_id))
+                else:
+                    print(f"  - Error: Tool '{tool_name}' not found.")
+                    tool_messages.append(ToolMessage(content=f"Error: Tool '{tool_name}' not found.", tool_call_id=tool_id))
+
+            # Add tool results to messages and call LLM again
+            messages.extend(tool_messages)
+            print("DEBUG: Re-invoking LLM after tool execution.")
+            response = llm_with_tools.invoke(messages) # Call again with tool results
+            print(f"--- Second CoT LLM Response (after tools): {repr(response)} ---")
+        
+        # --- Process Final Response for Structured Output ---
+        if hasattr(response, 'content') and response.content:
+            print("--- Attempting Structured Output on final CoT response ---")
+            # Ensure we use the LLM *without* tools for structured output parsing
+            structured_llm = llm.with_structured_output(TutorSolution) 
+            # Invoke with the final response content (which should contain the structured info)
+            # Wrap content in a HumanMessage or similar if needed, but try invoking directly first if it's a BaseMessage
+            try:
+                 # Check if response is already a BaseMessage, otherwise wrap content
+                 if isinstance(response, BaseMessage):
+                     invocation_input = [response] 
+                 else: 
+                     invocation_input = [AIMessage(content=response.content)] # Fallback
+
+                 final_structured_response = structured_llm.invoke(invocation_input)
+                 print(f"--- Structured Output Object Returned: {repr(final_structured_response)} ---")
+
+                 if isinstance(final_structured_response, TutorSolution):
+                     print("--- Structured Output Success! --- ")
+                     return {
+                         "solution_steps": final_structured_response.steps,
+                         "correct_answer": final_structured_response.final_answer,
+                         "error": None,
+                         "chat_history": messages + [AIMessage(content=response.content)] # Add final response
+                     }
+                 else:
+                     print("Error: Structured output call did not return TutorSolution.")
+                     return {"error": f"Failed to get structured output. Returned object: {repr(final_structured_response)}"}
+
+            except Exception as struct_err:
+                print(f"Error during structured output parsing: {struct_err}")
+                # Fallback: Try to extract from raw content if possible (less reliable)
+                return {
+                    "error": f"Structured output failed: {struct_err}. Raw content: {response.content}",
+                    "solution_steps": ["Could not parse steps."], 
+                    "correct_answer": "Could not parse answer."
+                    }
+
+        else:
+             print("Error: Final LLM response after potential tool calls had no content.")
+             return {"error": f"Final CoT LLM response missing content. Final Response Object: {repr(response)}"}
 
     except Exception as e:
-        print(f"Error in generate_cot: {str(e)}")
+        print(f"Error in generate_cot (tool handling): {str(e)}")
         import traceback
         traceback.print_exc()
-        return {"error": f"Error generating CoT: {str(e)}"}
+        return {"error": f"Error generating CoT with tool handling: {str(e)}"}
 
 def assess_answer(state: SimpleTutorState) -> dict:
     print("--- Node: assess_answer ---")
@@ -262,29 +308,52 @@ def assess_answer(state: SimpleTutorState) -> dict:
 
 def generate_hint(state: SimpleTutorState) -> dict:
     print("--- Node: generate_hint ---")
-    # TODO: Implement LLM call for hint generation
     problem = state["problem"]
+    # Use solution_steps if available
     steps = state.get("solution_steps")
-    history = state["chat_history"]
-    hint_text = f"Hint for '{problem}': Consider the overall goal."
-    if steps:
-        hint_text = f"Hint for '{problem}': The first step is '{steps[0]}'. What comes next?"
+    history = state.get("chat_history", [])
 
-    current_history = list(history) if history else []
+    hint_text = f"Hint for '{problem}': Think about the first step."
+    if steps:
+        # Example: Provide the next step as a hint (needs step tracking later)
+        # For now, just use the first step if available
+        hint_text = f"Hint for '{problem}': The first step involves '{steps[0]}'."
+
+    current_history = list(history)
     new_history = current_history + [AIMessage(content=hint_text)]
-    return {"hint": hint_text, "chat_history": new_history}
+    # Return *only* the hint and updated history for this turn's action
+    # Clear other fields that might be left over from previous turns
+    return {
+        "hint": hint_text, 
+        "chat_history": new_history, 
+        "feedback": None, 
+        "error": None,
+        "is_correct": None # Clear assessment from previous turns
+    }
 
 def generate_solution_response(state: SimpleTutorState) -> dict:
     print("--- Node: generate_solution_response ---")
-    correct_ans = state.get("correct_answer", "No solution generated.")
+    correct_ans = state.get("correct_answer", "Could not determine correct answer.")
     steps = state.get("solution_steps")
+    history = state.get("chat_history", [])
+
     response = f"The correct answer is: {correct_ans}\n"
     if steps:
         response += "Steps:\n" + "\n".join(f"- {s}" for s in steps)
+    else:
+        response += "(Could not generate detailed steps)"
 
-    current_history = list(state["chat_history"]) if state.get("chat_history") else []
+    current_history = list(history)
     new_history = current_history + [AIMessage(content=response)]
-    return {"feedback": response, "chat_history": new_history} # Use feedback field for final output
+     # Return the full solution in 'feedback', plus updated history
+     # Clear other fields
+    return {
+        "feedback": response, 
+        "chat_history": new_history, 
+        "hint": None, 
+        "error": None,
+        "is_correct": None
+    }
 
 def assess_complexity(state: SimpleTutorState) -> dict:
     """Assess the complexity of the math problem."""
@@ -347,110 +416,220 @@ def generate_plan(state: SimpleTutorState) -> dict:
         print(f"Error generating plan: {e}")
         return {"error": f"Failed to generate plan: {str(e)}", "plan": ["Plan generation failed due to error."]}
 
+def interpret_request(state: SimpleTutorState) -> dict:
+    """Analyzes the user's input to understand the specific request details."""
+    print("--- Node: interpret_request ---")
+    user_input = state["problem"] # The raw input is in the 'problem' field
+    # history = state["chat_history"] # History not strictly needed for basic interpretation
+
+    system_message_content = "Analyze the user's request. Identify the core math problem and any specific instructions like 'explain steps', 'show work', or 'define term'. Output a brief description of these details."
+    human_message_content = f"User request: {user_input}"
+    
+    # Construct the list of messages directly
+    messages_to_invoke = [
+        SystemMessage(content=system_message_content),
+        HumanMessage(content=human_message_content)
+    ]
+    
+    try:
+        # Use the base LLM without tools for this simple interpretation
+        response = llm.invoke(messages_to_invoke) # Pass the list of messages
+        details = response.content.strip()
+        print(f"--- Interpreted Request Details: {details} ---")
+        # Store details, potentially clear previous errors if interpretation succeeds
+        return {"request_details": details, "error": None} 
+    except Exception as e:
+        print(f"Error in interpret_request: {e}")
+        # Proceed even if interpretation fails, but log an error state
+        return {"request_details": "Interpretation failed.", "error": f"Interpretation error: {e}"}
+
+# Main action router logic - This function is ONLY for conditional edges
+def route_next_action(state: SimpleTutorState):
+    action = state.get("action")
+    user_answer_provided = state.get("user_answer") is not None
+    print(f"--- Routing Condition: Action='{action}', UserAnswerProvided={user_answer_provided} ---")
+    # Determine the next step based on the action
+    if action == "assess" and user_answer_provided:
+        return "generate_cot_then_assess"
+    elif action == "hint":
+        return "generate_cot_then_hint"
+    elif action == "solve":
+        return "generate_cot_then_solution"
+    else:
+        print(f"--- Routing Condition: No specific action ('{action}') or prerequisite missing, ending turn. ---")
+        return "__end__"
+
+# --- Dummy function for the router node --- 
+def action_router_node_logic(state: SimpleTutorState) -> dict:
+    """This node only acts as a branching point. Logic is in edges."""
+    print("--- Node: action_router (Branching Point) ---")
+    return {} # Nodes must return a dictionary
+
 # --- Graph Definition ---
 builder = StateGraph(SimpleTutorState)
 
 # Add nodes
+builder.add_node("interpret_request", interpret_request)
 builder.add_node("assess_complexity", assess_complexity)
 builder.add_node("generate_plan", generate_plan)
-builder.add_node("generate_cot", generate_cot)
+builder.add_node("generate_cot", generate_cot) # Shared node
 builder.add_node("assess_answer", assess_answer)
-# Keep hint/response nodes for potential future use, but disconnected for now
-builder.add_node("generate_hint", generate_hint) 
-builder.add_node("generate_solution_response", generate_solution_response) 
+builder.add_node("generate_hint", generate_hint)
+builder.add_node("generate_solution_response", generate_solution_response)
+# Intermediate nodes calling generate_cot
+builder.add_node("generate_cot_then_assess", generate_cot)
+builder.add_node("generate_cot_then_hint", generate_cot)
+builder.add_node("generate_cot_then_solution", generate_cot)
+# Add the router node with the dummy logic function
+builder.add_node("action_router", action_router_node_logic) 
 
-# --- Define Edges and Routing ---
+# --- Define Edges and Routing --- 
+builder.set_entry_point("interpret_request")
+builder.add_edge("interpret_request", "assess_complexity")
 
-# Start by assessing complexity
-builder.set_entry_point("assess_complexity")
-
-# Routing based on complexity
+# Routing after complexity assessment
 def route_after_complexity(state: SimpleTutorState):
-    complexity = state.get("complexity", "medium") # Default if somehow missing
-    print(f"--- Routing based on complexity: {complexity} ---")
-    if complexity == 'simple':
-        return "generate_cot" # Go directly to CoT generation
-    else:
-        return "generate_plan" # Go to planning step
+    complexity = state.get("complexity", "medium")
+    print(f"--- Routing after Complexity: '{complexity}' ---")
+    # Point to plan or the actual router node
+    return "generate_plan" if complexity != 'simple' else "action_router"
 
 builder.add_conditional_edges(
     "assess_complexity",
     route_after_complexity,
     {
         "generate_plan": "generate_plan",
-        "generate_cot": "generate_cot"
+        "action_router": "action_router" # Route to the router node
     }
 )
 
-# After planning (if done), generate the detailed CoT
-builder.add_edge("generate_plan", "generate_cot")
+# After plan, go to the action router node
+builder.add_edge("generate_plan", "action_router")
 
-# After generating CoT (either path), assess the user's answer
-builder.add_edge("generate_cot", "assess_answer")
-
-# Conditional logic after assessment (remains the same for now)
-def decide_after_assessment(state: SimpleTutorState):
-    if state.get("is_correct") is None:
-        print("--- Branch: Assessment could not be performed (e.g., no user answer), ending. ---")
-        return "__end__"
-    elif state.get("is_correct") is True:
-        print("--- Branch: Correct answer, ending. ---")
-        return "__end__"
-    else:
-        print("--- Branch: Incorrect answer, ending (will interrupt here later). ---")
-        return "__end__"
-
+# Edges FROM the action router node
 builder.add_conditional_edges(
-    "assess_answer",
-    decide_after_assessment,
-    {"__end__": END} # Map return value to END
+    "action_router",     # Source node is the actual router node
+    route_next_action,   # Condition function determines the path
+    {
+        # Map the return values to actual target nodes
+        "generate_cot_then_assess": "generate_cot_then_assess",
+        "generate_cot_then_hint": "generate_cot_then_hint",
+        "generate_cot_then_solution": "generate_cot_then_solution",
+        "__end__": END
+    }
 )
+
+# Edges AFTER the generate_cot run for specific actions
+builder.add_edge("generate_cot_then_assess", "assess_answer")
+builder.add_edge("generate_cot_then_hint", "generate_hint")
+builder.add_edge("generate_cot_then_solution", "generate_solution_response")
+
+# Edges after final action nodes to END
+builder.add_edge("assess_answer", END)
+builder.add_edge("generate_hint", END)
+builder.add_edge("generate_solution_response", END)
 
 # Compile the graph
 app = builder.compile()
-print("Simple Tutor Graph Compiled with Complexity Routing.")
+print("Simple Tutor Graph Compiled (Turn-Based, No Interrupts).")
 
-# Example of how to run (will be interactive later)
+# --- Interactive Simulation Run ---
 if __name__ == "__main__":
     import asyncio
     import pprint
+    import uuid
+    # Keep graph drawing imports if desired
+    from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod
 
-    async def run_interactive_example():
-        # problem = "x + 5 = 10"
-        problem = "Solve for y: 3*y - 5 = 7" # Slightly more complex
-        print(f"Problem: {problem}")
-        user_input = input(f"Enter your answer (e.g., y = 4): ")
+    # ... (Optional graph drawing) ...
 
-        initial_state = {
-            "problem": problem,
-            "user_answer": user_input.strip() if user_input else None,
-            "chat_history": [HumanMessage(content=f"Solve: {problem}")],
-            # Ensure all keys exist, even if None initially
-            "solution_steps": None,
-            "correct_answer": None,
-            "verification_result": None,
-            "is_correct": None,
-            "feedback": None,
-            "hint": None,
-            "error": None,
-        }
+    print("--- Math Tutor Simulation --- (LangSmith Tracing Disabled)")
 
-        print("\n--- Running Graph with User Input ---")
-        final_state = None
-        try:
-            # Use ainvoke to get the final state directly
-            final_state = await app.ainvoke(initial_state, {"recursion_limit": 10}) # Add recursion limit
-            print("\n--- Graph Execution Complete ---")
-        except Exception as e:
-            print("\n--- Graph Execution Error ---")
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
+    # Initial problem setup
+    thread_id = str(uuid.uuid4()) # Start a new thread/session
+    config = {"configurable": {"thread_id": thread_id}}
+    problem = "Solve for y: 3*y - 5 = 7"
+    print(f"Problem: {problem}")
 
-        print("\n--- Final State ---")
-        if final_state:
-            pprint.pprint(final_state)
+    current_state = None # Keep track of the latest state
+
+    # --- Turn 1: Ask Tutor to Solve ---
+    print("\n--- Turn 1: Asking Tutor to Solve ---")
+    initial_input = {
+        "problem": problem,
+        "action": "solve",
+        "chat_history": [] # Start clean
+    }
+    current_state = app.invoke(initial_input, config=config)
+
+    if current_state:
+        if current_state.get("error"):
+             print(f"\n>> Tutor Error: {current_state['error']}")
+        if current_state.get("solution_steps"):
+             print("\n>> Tutor Solution:")
+             for i, step in enumerate(current_state["solution_steps"]):
+                 print(f"  Step {i+1}: {step}")
+             print(f"  Final Answer: {current_state.get('correct_answer', 'Not found')}")
         else:
-            print("Execution did not complete successfully or final state not captured.")
+             print("\n>> Tutor: I couldn't generate a solution.") # Should have error above
 
-    asyncio.run(run_interactive_example())
+    else:
+        print("\n>> Tutor: Failed to process the initial request.")
+
+
+    # --- Subsequent Turns (Loop) ---
+    turn_counter = 1
+    while True:
+        turn_counter += 1
+        print(f"\n--- Turn {turn_counter} ---")
+        user_input = input("Your answer (or type 'hint' or 'quit'): ").strip()
+
+        if user_input.lower() == 'quit':
+            break
+        elif user_input.lower() == 'hint':
+            action = "hint"
+            user_answer = None
+            print("Asking for hint...")
+        else:
+            action = "assess"
+            user_answer = user_input
+            print(f"Submitting answer: {user_answer}")
+
+        # --- FIX: Ensure problem is passed in subsequent turns ---
+        if not current_state or "problem" not in current_state:
+            print("Error: Cannot continue without problem context from previous state.")
+            break
+        turn_input = {
+            "problem": current_state["problem"], # Carry over the problem
+            "action": action,
+            "user_answer": user_answer
+            # The graph state (history, solution) is maintained via thread_id
+        }
+        current_state = app.invoke(turn_input, config=config) # Continue the thread
+
+        # User-friendly output
+        if current_state:
+            if current_state.get("error"):
+                 print(f"\n>> Tutor Error: {current_state['error']}")
+                 # Optionally break or decide how to handle errors continuing
+            if action == "assess" and current_state.get("feedback"):
+                 print(f"\n>> Tutor Feedback: {current_state['feedback']}")
+            elif action == "hint" and current_state.get("hint"):
+                 print(f"\n>> {current_state['hint']}") # Hint text already formatted
+            # Check if there was output other than error
+            elif not current_state.get("error"):
+                 print("\n>> Tutor: Processed your input.") # Generic fallback if no specific feedback/hint
+
+        else:
+            print("\n>> Tutor: Failed to process your request.")
+            break # Exit loop if invoke fails entirely
+
+    print("\n--- Simulation Complete ---")
+
+    # --- Restore Environment Variables (Optional) ---
+    # if original_trace_v2 is not None:
+    #     os.environ["LANGCHAIN_TRACING_V2"] = original_trace_v2
+    #     print("Restored LANGCHAIN_TRACING_V2.")
+    # Keep API key restoration commented unless explicitly needed/removed
+    # if original_api_key is not None:
+    #      os.environ["LANGCHAIN_API_KEY"] = original_api_key
